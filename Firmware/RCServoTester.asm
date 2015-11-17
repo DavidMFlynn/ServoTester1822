@@ -1,8 +1,8 @@
 ;====================================================================================================
 ;
 ;   Filename:	RCServoTester.asm
-;   Date:	1/11/2015
-;   File Version:	1.0a2
+;   Date:	11/16/2015
+;   File Version:	1.0a4
 ;
 ;    Author:	David M. Flynn
 ;    Company:	Oxford V.U.E., Inc.
@@ -14,6 +14,7 @@
 ;
 ;    History:
 ;
+; 1.0a4   11/16/2015	Works as a servo tester w/ the PCB.  I2C is not tested/working.
 ; 1.0a3   1/15/2015	Added I2C slave
 ; 1.0a2   1/11/2015	Added Center button.
 ; 1.0a1   1/10/2015	First working tests.
@@ -101,6 +102,7 @@
 ;
 	constant	oldCode=0
 	constant	useRS232=0
+	constant	useI2C=0
 ;
 #Define	_C	STATUS,C
 #Define	_Z	STATUS,Z
@@ -177,13 +179,10 @@ DebounceTime	EQU	d'10'
 ;
 	Timer1Lo		;1st 16 bit timer
 	Timer1Hi		; one second RX timeiout
-;
 	Timer2Lo		;2nd 16 bit timer
 	Timer2Hi		;
-;
 	Timer3Lo		;3rd 16 bit timer
 	Timer3Hi		;GP wait timer
-;
 	Timer4Lo		;4th 16 bit timer
 	Timer4Hi		; debounce timer
 ;
@@ -193,10 +192,6 @@ DebounceTime	EQU	d'10'
 	PositionBetaH
 	SysFlags
 ;
-; RS232 stuff
-;	TXByte	
-;	RXByte	
-;	SerialFlags	
 ;
 	endc
 ;
@@ -460,34 +455,28 @@ IRQ_Servo1_OL	MOVLW	LOW kServoDwellTime
 IRQ_Servo1_X	MOVLB	0x00
 	BCF	PIR1,CCP1IF
 IRQ_Servo1_End:
+	if useI2C
 ;-----------------------------------------------------------------------------------------
 ; I2C Com
-IRQ_4	MOVLB	0x00
-	btfss 	PIR1,SSP1IF 	; Is this a SSP interrupt?
-	goto 	IRQ_4_End 	; if not, bus collision int occurred
-	banksel	SSP1STAT						
-	btfsc	SSPSTAT,R_NOT_W	; is it a master read:
-	goto	I2C_READ	; if so go here
-	goto	I2C_WRITE	; if not, go here
-I2C_READ_Return:
-I2C_WRITE_Return	movlb	0x00
-	bcf 	PIR1,SSP1IF	; clear the SSP interrupt flag
-IRQ_4_End
+	MOVLB	0x00
+	btfsc	PIR1,SSP1IF 	; Is this a SSP interrupt?
+	call	I2C_ISR
+	movlb	0
+;
 ;-----------------------------------------------------------------------------------------
 ; I2C Bus Collision
-IRQ_5	MOVLB	0x00
+	MOVLB	0x00
 	btfss	PIR2,BCL1IF
 	goto	IRQ_5_End
-	banksel	SSPBUF						
-	clrf	SSPBUF	; clear the SSP buffer
-	movlb	0x00	;banksel PIR2
-	bcf	PIR2,BCL1IF	; clear the SSP interrupt flag	
-	banksel	SSPCON1
-	bsf	SSPCON1,CKP	; release clock stretch
+
+	banksel	SSP1BUF						
+	movf	SSP1BUF,w	; clear the SSP buffer
+	bsf	SSP1CON1,CKP	; release clock stretch
 	movlb	0x00
-;
+	bcf	PIR2,BCL1IF	; clear the SSP interrupt flag	
+
 IRQ_5_End:
-;
+	endif
 ;--------------------------------------------------------------------
 ;
 	retfie		; return from interrupt
@@ -507,7 +496,9 @@ ToggleSysLED	MOVF	LED_Time,W
 ;==============================================================================================
 ;==============================================================================================
 ;
+	if useI2C
 	include	I2C_SLAVE.inc
+	endif
 ;
 ;==============================================================================================
 ;**********************************************************************************************
@@ -585,11 +576,13 @@ start	MOVLB	0x01	; select bank 1
 	bsf	INTCON,GIE	; enable interupts
 ;
 	MOVLB	0x00	;bank 0
+	if useI2C
 	BTFSC	ModeBtnBit	;Test/setup mode?
 	BSF	I2C_IsActive	; Yes
 ;
 	BTFSC	I2C_IsActive	;Test/setup mode?
 	call	INITIALIZE_I2C	; No, set up uC
+	endif
 ;
 ;=========================================================================================
 ;=========================================================================================
@@ -601,8 +594,10 @@ start	MOVLB	0x01	; select bank 1
 ;=========================================================================================
 ;
 MainLoop	CLRWDT
+	if useI2C
 	BTFSC	I2C_IsActive	;Test/Setup mode?
 	GOTO	I2C_DataInturp
+	endif
 	CALL	ReadAN0	; Yes
 ;
 	MOVLB	0x00
@@ -655,6 +650,7 @@ Move_It	CALL	Copy7CToSig
 ;
 	goto	MainLoop
 ;
+	if useI2C
 ;==============================================================
 ;
 I2C_DataInturp	BTFSC	I2C_RXLocked
@@ -679,6 +675,7 @@ I2C_DataInturp	BTFSC	I2C_RXLocked
 	GOTO	DoCenter
 ;
 	GOTO	MainLoop
+	endif
 ;
 ;=========================================================================================
 ;=========================================================================================
